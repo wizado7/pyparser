@@ -1,7 +1,8 @@
+import inspect
 from contextlib import suppress
 import pyparsing as pp
 from nodes import *
-import inspect
+
 
 class PascalParser:
     def __init__(self):
@@ -9,47 +10,77 @@ class PascalParser:
 
     @staticmethod
     def parse(rule_name: str, parser: pp.ParserElement) -> None:
-        """
-        Метод для настройки обработчиков парсера.
-        Преобразует токены в узлы AST-дерева.
-        """
+        """Назначает обработчики, формирующие AST-дерево."""
         if rule_name == rule_name.upper():
-            return
+            return  # Игнорируем полностью заглавные имена (типы данных, ключевые слова)
 
         # Если у парсера есть имя, используем его
         if getattr(parser, 'name', None) and parser.name.isidentifier():
             rule_name = parser.name
 
-        # Обработка бинарных операций
-        if rule_name in ('bin_op',):
+        # Обработка бинарных операций (арифметические, логические)
+        if rule_name in ('arith_expr', 'logical_expr', 'bin_op'):
             def bin_op_parse_action(s, loc, tocs):
-                """
-                Обработчик для бинарных операций (например, 5 + 3).
-                Создает узел BinOpNode.
-                """
-                node = tocs[0]
-                if not isinstance(node, AstNode):
-                    node = bin_op_parse_action(s, loc, node)
-                for i in range(1, len(tocs) - 1, 2):
-                    secondNode = tocs[i + 1]
-                    if not isinstance(secondNode, AstNode):
-                        secondNode = bin_op_parse_action(s, loc, secondNode)
-                    node = BinOpNode(BinOp(tocs[i]), node, secondNode)
+                if len(tocs) == 1:
+                    return tocs[0]  # Один элемент — просто возвращаем его
+                node = BinOpNode(BinOp(tocs[1]), tocs[0], tocs[2])
+                for i in range(3, len(tocs), 2):
+                    node = BinOpNode(BinOp(tocs[i]), node, tocs[i + 1])
                 return node
 
             parser.setParseAction(bin_op_parse_action)
 
-        # Обработка других конструкций (if, while, assign и т.д.)
-        else:
-            # Преобразуем имя правила в имя класса узла AST-дерева
-            cls_name = ''.join(x.capitalize() for x in rule_name.split('_')) + 'Node'
-            with suppress(NameError):
-                cls = eval(cls_name)  # Получаем класс узла по имени
-                if not inspect.isabstract(cls):  # Проверяем, что класс не абстрактный
-                    def parse_action(s, loc, tocs):
-                        """
-                        Обработчик для создания узлов AST-дерева.
-                        """
-                        return cls(*tocs)  # Создаем узел AST-дерева
+        # Обработка присваивания (:=)
+        elif rule_name == 'assign':
+            def assign_action(s, loc, tocs):
+                return AssignNode(tocs[0], tocs[2])  # tocs[1] — это оператор ':='
 
-                    parser.setParseAction(parse_action)
+            parser.setParseAction(assign_action)
+
+        # Обработка оператора IF
+        elif rule_name == 'if_stmt':
+            def if_action(s, loc, tocs):
+                cond = tocs[0]
+                then_stmt = tocs[1]
+                else_stmt = tocs[2] if len(tocs) > 2 else None
+                return IfNode(cond, then_stmt, else_stmt)
+
+            parser.setParseAction(if_action)
+
+        # Обработка WHILE-цикла
+        elif rule_name == 'while_stmt':
+            def while_action(s, loc, tocs):
+                return WhileNode(tocs[0], tocs[1])
+
+            parser.setParseAction(while_action)
+
+        # Обработка списка операторов (StmtListNode)
+        elif rule_name == 'stmt_list':
+            def stmt_list_action(s, loc, tocs):
+                return StmtListNode(*tocs)
+
+            parser.setParseAction(stmt_list_action)
+
+        # Обработка объявления переменных (VarDeclNode)
+        elif rule_name == 'var_decl':
+            def var_decl_action(s, loc, tocs):
+                return VarDeclNode(tocs[0], tocs[1])  # tocs[0] — список переменных, tocs[1] — тип
+
+            parser.setParseAction(var_decl_action)
+
+        # Обработка программы (ProgramNode)
+        elif rule_name == 'program':
+            def program_action(s, loc, tocs):
+                return ProgramNode(tocs[0], tocs[1], tocs[2])
+
+            parser.setParseAction(program_action)
+
+        # Попытка автоматически привязать класс AST-узла
+        else:
+            class_name = ''.join(x.capitalize() for x in rule_name.split('_')) + 'Node'
+            cls = globals().get(class_name)
+            if cls and inspect.isclass(cls) and not inspect.isabstract(cls):
+                def parse_action(s, loc, tocs):
+                    return cls(*tocs)
+
+                parser.setParseAction(parse_action)

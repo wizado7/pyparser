@@ -7,7 +7,7 @@ def main():
     var
         a: integer;
     begin
-        a := 5 + 3;
+        
         if a > 0 then
             a := a - 1;
     end.
