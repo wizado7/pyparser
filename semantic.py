@@ -109,6 +109,7 @@ class SemanticAnalyzer(NodeVisitor):
             'LOGICAL_AND': ['boolean'],
             'LOGICAL_OR': ['boolean']}
         self.current_scope = None
+        self.log = []
 
     #convert type name to a correct format
     def __changeType(self,type) -> str:
@@ -167,19 +168,25 @@ class SemanticAnalyzer(NodeVisitor):
     def visit_LiteralNode(self, node: LiteralNode):
         return type(node.value).__name__
 
-    def visit_ProgramNode(self, node: ProgramNode):
-        print('ENTER scope: global')
+    def visit_ProgramNode(self, node):
         self.global_scope = ScopedSymbolTable(
             scope_name='global',
             scope_level=1,
-            enclosing_scope=self.current_scope
         )
         self.current_scope = self.global_scope
-        self.visit(node.vars_decl)
+        self.log.append(f'ENTER scope: global')
+        self.current_scope.init_builtins()
+        self.current_scope.init_builtin_functions()
+
+        # Посещаем блок объявлений
+        if hasattr(node, 'decl_section') and node.decl_section:
+            self.visit(node.decl_section)
+
+        # Посещаем тело программы
         self.visit(node.stmt_list)
-        print(self.current_scope)
-        self.current_scope = self.current_scope.enclosing_scope
-        print('LEAVE scope: global')
+        
+        self.log.append(f'LEAVE scope: global')
+        self.current_scope = None
 
     def visit_VarsDeclNode(self, node: VarsDeclNode):
         for var_decl in node.var_decs:
@@ -252,11 +259,11 @@ class SemanticAnalyzer(NodeVisitor):
             )
 
     def visit_ProcedureDeclNode(self, node: ProcedureDeclNode):
-        proc_name = node.proc_name.name
+        proc_name = node.name.name
         proc_symbol = ProcedureSymbol(proc_name)
         self.current_scope.define(proc_symbol)
 
-        print('ENTER scope: %s' % proc_name)
+        self.log.append(f'ENTER scope: {proc_name}')
         procedure_scope = ScopedSymbolTable(
             scope_name=proc_name,
             scope_level=self.current_scope.scope_level + 1,
@@ -264,48 +271,89 @@ class SemanticAnalyzer(NodeVisitor):
         )
 
         self.current_scope = procedure_scope
-        for param in node.params.vars_list:
-            param_type = self.current_scope.lookup(param.vars_type.name)
-            for param_name in param.ident_list.idents:
-                var_symbol = VarSymbol(param_name.name, param_type)
+        
+        # Обрабатываем параметры
+        for param in node.params:
+            if isinstance(param, IdentNode):
+                # Это может быть простой идентификатор
+                param_name = param.name
+                param_type = self.current_scope.lookup('integer')  # По умолчанию integer
+                var_symbol = VarSymbol(param_name, param_type)
                 self.current_scope.define(var_symbol)
                 proc_symbol.params.append(var_symbol)
+            else:
+                # Это может быть декларация типа
+                param_type = self.current_scope.lookup(param.vars_type.name)
+                for param_name in param.ident_list.idents:
+                    var_symbol = VarSymbol(param_name.name, param_type)
+                    self.current_scope.define(var_symbol)
+                    proc_symbol.params.append(var_symbol)
 
-        for stmt in node.stmt_list.body.exprs:
-            self.visit(stmt)
+        # Проверяем, есть ли после параметров объявления внутри процедуры
+        i_next = 2
+        if i_next < len(node.decls) and isinstance(node.decls[i_next], DeclSectionNode):
+            # Обрабатываем объявления внутри процедуры
+            print(f"DEBUG: Processing inner declarations for procedure {proc_name}")
+            self.visit(node.decls[i_next])
+            i_next += 1
 
-        print(procedure_scope)
+        # Проверяем, есть ли тело процедуры
+        if i_next < len(node.decls) and isinstance(node.decls[i_next], StmtListNode):
+            # Обрабатываем тело процедуры
+            print(f"DEBUG: Processing body for procedure {proc_name}")
+            self.visit(node.decls[i_next])
+
+        # Завершаем область видимости процедуры
+        self.log.append(str(procedure_scope))
         self.current_scope = self.current_scope.enclosing_scope
-        print('LEAVE scope: %s' % proc_name)
+        self.log.append(f'LEAVE scope: {proc_name}')
+
+        # Пропускаем обработанные узлы
+        i = i_next + 1
 
     def visit_FunctionDeclNode(self, node: FunctionDeclNode):
-        func_name = node.proc_name.name
-        func_type = node.returning_type.name
+        func_name = node.name.name
+        func_type = node.return_type.name
         func_symbol = FunctionSymbol(func_name)
         func_symbol.type = func_type
         self.current_scope.define(func_symbol)
 
-        print('ENTER scope: %s' % func_name)
-        procedure_scope = ScopedSymbolTable(
+        self.log.append(f'ENTER scope: {func_name}')
+        function_scope = ScopedSymbolTable(
             scope_name=func_name,
             scope_level=self.current_scope.scope_level + 1,
             enclosing_scope=self.current_scope
         )
 
-        self.current_scope = procedure_scope
-        for param in node.params.vars_list:
-            param_type = self.current_scope.lookup(param.vars_type.name)
-            for param_name in param.ident_list.idents:
-                var_symbol = VarSymbol(param_name.name, param_type)
+        self.current_scope = function_scope
+        
+        # Обрабатываем параметры
+        for param in node.params:
+            if isinstance(param, IdentNode):
+                # Это может быть простой идентификатор
+                param_name = param.name
+                param_type = self.current_scope.lookup('integer')  # По умолчанию integer
+                var_symbol = VarSymbol(param_name, param_type)
                 self.current_scope.define(var_symbol)
                 func_symbol.params.append(var_symbol)
+            else:
+                # Это может быть декларация типа
+                param_type = self.current_scope.lookup(param.vars_type.name)
+                for param_name in param.ident_list.idents:
+                    var_symbol = VarSymbol(param_name.name, param_type)
+                    self.current_scope.define(var_symbol)
+                    func_symbol.params.append(var_symbol)
 
-        for stmt in node.stmt_list.body.exprs:
-            self.visit(stmt)
+        # Обрабатываем локальные переменные
+        if hasattr(node, 'vars_decl') and node.vars_decl:
+            self.visit(node.vars_decl)
 
-        print(procedure_scope)
+        # Обрабатываем тело функции
+        self.visit(node.stmt_list)
+
+        self.log.append(str(function_scope))
         self.current_scope = self.current_scope.enclosing_scope
-        print('LEAVE scope: %s' % func_name)
+        self.log.append(f'LEAVE scope: {func_name}')
 
     def visit_CallNode(self, node: CallNode):
         func_name = node.func.name
@@ -354,3 +402,112 @@ class SemanticAnalyzer(NodeVisitor):
                 "Wrong type of for condition '%s'" % type_to
             )
         self.visit(node.body)
+
+    def visit_DeclSectionNode(self, node: DeclSectionNode):
+        """
+        Обрабатываем секцию объявлений с учетом особенностей AST
+        """
+        print("\nDEBUG: DeclSectionNode contents:")
+        for i, decl in enumerate(node.decls):
+            print(f"  {i}: {type(decl).__name__}")
+            if hasattr(decl, 'name'):
+                print(f"     name: {decl.name}")
+            if hasattr(decl, 'childs'):
+                print(f"     childs: {[type(c).__name__ for c in decl.childs]}")
+        
+        # Определение структуры AST - какие узлы образуют процедуру или функцию
+        i = 0
+        while i < len(node.decls):
+            decl = node.decls[i]
+            
+            if isinstance(decl, VarDeclNode) or isinstance(decl, ArrayDeclNode) or isinstance(decl, VarsDeclNode):
+                # Обработка обычных объявлений переменных
+                self.visit(decl)
+                i += 1
+            elif isinstance(decl, IdentNode) and i + 2 < len(node.decls) and isinstance(node.decls[i+1], ParamsNode):
+                # Это похоже на начало процедуры: имя + параметры
+                proc_name = decl.name
+                print(f"DEBUG: Found procedure {proc_name}")
+                
+                # Создаем символ процедуры
+                proc_symbol = ProcedureSymbol(proc_name)
+                self.current_scope.define(proc_symbol)
+                
+                # Создаем область видимости для процедуры
+                self.log.append(f'ENTER scope: {proc_name}')
+                procedure_scope = ScopedSymbolTable(
+                    scope_name=proc_name,
+                    scope_level=self.current_scope.scope_level + 1,
+                    enclosing_scope=self.current_scope
+                )
+                self.current_scope = procedure_scope
+                
+                # Обрабатываем параметры
+                params_node = node.decls[i+1]
+                print(f"DEBUG: Processing parameters for procedure {proc_name}")
+                if isinstance(params_node, ParamsNode):
+                    for child in params_node.childs:
+                        if isinstance(child, IdentListNode):
+                            # Получаем список идентификаторов параметров
+                            for ident in child.idents:
+                                print(f"DEBUG: Processing parameter {ident.name}")
+                                param_name = ident.name
+                                # По умолчанию тип integer, но может быть указан явно
+                                param_type = self.current_scope.lookup('integer')
+                                var_symbol = VarSymbol(param_name, param_type)
+                                self.current_scope.define(var_symbol)
+                                proc_symbol.params.append(var_symbol)
+                        elif isinstance(child, TypeSpecNode):
+                            # Получен тип параметров
+                            param_type_name = child.name
+                            param_type = self.current_scope.lookup(param_type_name)
+                            # Обновляем тип последнего добавленного параметра
+                            if proc_symbol.params and param_type:
+                                for param in proc_symbol.params:
+                                    param.type = param_type
+                
+                # Проверяем, есть ли после параметров объявления внутри процедуры
+                i_next = i + 2
+                if i_next < len(node.decls) and isinstance(node.decls[i_next], DeclSectionNode):
+                    # Обрабатываем объявления внутри процедуры
+                    print(f"DEBUG: Processing inner declarations for procedure {proc_name}")
+                    self.visit(node.decls[i_next])
+                    i_next += 1
+
+                # Проверяем, есть ли тело процедуры
+                if i_next < len(node.decls) and isinstance(node.decls[i_next], StmtListNode):
+                    # Обрабатываем тело процедуры
+                    print(f"DEBUG: Processing body for procedure {proc_name}")
+                    self.visit(node.decls[i_next])
+
+                # Завершаем область видимости процедуры
+                self.log.append(str(procedure_scope))
+                self.current_scope = self.current_scope.enclosing_scope
+                self.log.append(f'LEAVE scope: {proc_name}')
+                
+                # Пропускаем обработанные узлы
+                i = i_next + 1
+            else:
+                # Обработка других типов узлов
+                try:
+                    self.visit(decl)
+                except Exception as e:
+                    print(f"WARNING: Error processing node {type(decl).__name__}: {e}")
+                i += 1
+
+    def visit_ParamsNode(self, node: ParamsNode):
+        """
+        Обработка узла параметров процедуры или функции
+        """
+        print("DEBUG: ParamsNode processing")
+        # В текущей реализации мы просто пропускаем узел параметров,
+        # так как они должны обрабатываться в контексте ProcedureDeclNode
+        # Но в нашем случае структура AST разбита на отдельные компоненты
+        pass
+
+    def visit_TypeSpecNode(self, node: TypeSpecNode):
+        """
+        Обработка узла с типом
+        """
+        print(f"DEBUG: TypeSpecNode processing: {node.name}")
+        return node.name

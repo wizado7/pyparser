@@ -340,45 +340,20 @@ class ParamsNode(StmtNode):
     def __str__(self) -> str:
         return 'params'
 
-# Узел описывающий программу
-# prog_name название программы
-# vars_decl раздел описаний
-# stmt_list тело программы
-class ProgramNode(ExprNode):
-    def __init__(self, prog_name: Tuple[AstNode, ...], vars_decl: Tuple[AstNode, ...],
-                 stmt_list: Tuple[AstNode, ...],
+# Узел содержщий объявление процедуры
+# число параметров *args зависит от того, объявили мы процедуру с параметрами или без
+class ProcedureDeclNode(StmtNode):
+    def __init__(self, name: IdentNode, params: Tuple[IdentNode, ...], vars_decl: Optional[VarsDeclNode], stmt_list: StmtListNode,
                  row: Optional[int] = None, line: Optional[int] = None, **props):
         super().__init__(row=row, line=line, **props)
-        self.prog_name = prog_name
+        self.name = name
+        self.params = params
         self.vars_decl = vars_decl
         self.stmt_list = stmt_list
 
     @property
-    def childs(self) -> Tuple[AstNode, ...]:
-        return (self.prog_name,) + (self.vars_decl,) + (self.stmt_list,)
-
-    def __str__(self) -> str:
-        return 'Program'
-
-# Узел содержщий объявление процедуры
-# число параметров *args зависит от того, объявили мы процедуру с параметрами или без
-class ProcedureDeclNode(ExprNode):
-    def __init__(self, *args, **props):
-        super().__init__(row=_empty, line=_empty, **props)
-        self.proc_name = args[0]
-        if(len(args) == 4):
-            self.params = args[1]
-            self.vars_decl = args[2]
-            self.stmt_list = args[3]
-        else:
-            self.params = _empty
-            self.vars_decl = args[1]
-            self.stmt_list = args[2]
-
-    @property
-    def childs(self) -> Tuple[AstNode, ...]:
-        return (self.proc_name,) + (self.params,) + (self.vars_decl,) + (self.stmt_list,)
-
+    def childs(self) -> Tuple[IdentNode, ...]:
+        return (self.name,) + self.params + (self.vars_decl,) + (self.stmt_list,)
 
     def __str__(self) -> str:
         return 'procedure'
@@ -386,27 +361,56 @@ class ProcedureDeclNode(ExprNode):
 
 # Узел содержщий объявление функции
 # число параметров *args зависит от того, объявили мы функцию с параметрами или без
-class FunctionDeclNode(ExprNode):
-    def __init__(self,*args,**props):
-        super().__init__(row=_empty, line=_empty, **props)
-        self.proc_name = args[0]
-        if (len(args) == 5):
-            self.params = args[1]
-            self.returning_type = args[2]
-            self.vars_decl = args[3]
-            self.stmt_list = args[4]
-        else:
-            self.params = _empty
-            self.returning_type = args[1]
-            self.vars_decl = args[2]
-            self.stmt_list = args[3]
+class FunctionDeclNode(StmtNode):
+    def __init__(self, name: IdentNode, params: Tuple[IdentNode, ...], return_type: IdentNode, vars_decl: Optional[VarsDeclNode], stmt_list: StmtListNode,
+                 row: Optional[int] = None, line: Optional[int] = None, **props):
+        super().__init__(row=row, line=line, **props)
+        self.name = name
+        self.params = params
+        self.return_type = return_type
+        self.vars_decl = vars_decl
+        self.stmt_list = stmt_list
 
     @property
-    def childs(self) -> Tuple[AstNode, ...]:
-        return (self.proc_name,) + (self.params,) + (self.returning_type,) + (self.vars_decl,) + (self.stmt_list,)
+    def childs(self) -> Tuple[IdentNode, ...]:
+        return (self.name,) + self.params + (self.return_type,) + (self.vars_decl,) + (self.stmt_list,)
 
     def __str__(self) -> str:
         return 'function'
 
+
+# Добавляем класс DeclSectionNode в файл nodes.py
+class DeclSectionNode(StmtNode):
+    def __init__(self, *decls: Tuple[Union[VarsDeclNode, ProcedureDeclNode, FunctionDeclNode], ...],
+                 row: Optional[int] = None, line: Optional[int] = None, **props):
+        super().__init__(row=row, line=line, **props)
+        self.decls = decls
+
+    @property
+    def childs(self) -> Tuple[Union[VarsDeclNode, ProcedureDeclNode, FunctionDeclNode], ...]:
+        return self.decls
+
+    def __str__(self) -> str:
+        return 'declarations'
+
+
+# Узел описывающий программу
+# prog_name название программы
+# vars_decl раздел описаний
+# stmt_list тело программы
+class ProgramNode(StmtNode):
+    def __init__(self, name: IdentNode, decl_section: Optional[DeclSectionNode], stmt_list: StmtListNode,
+                 row: Optional[int] = None, line: Optional[int] = None, **props):
+        super().__init__(row=row, line=line, **props)
+        self.name = name
+        self.decl_section = decl_section
+        self.stmt_list = stmt_list
+
+    @property
+    def childs(self) -> Tuple[IdentNode, Optional[DeclSectionNode], StmtListNode]:
+        return (self.name,) + ((self.decl_section,) if self.decl_section else tuple()) + (self.stmt_list,)
+
+    def __str__(self) -> str:
+        return 'program'
 
 _empty = StmtListNode()
