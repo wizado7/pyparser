@@ -34,36 +34,41 @@ class PascalGrammar:
         LBRACE, RBRACE = pp.CaselessKeyword("begin").suppress(), pp.CaselessKeyword("end").suppress()
         SEMI, COMMA, COLON = pp.Literal(';').suppress(), pp.Literal(',').suppress(), pp.Literal(':').suppress()
         ASSIGN = pp.Literal(':=')
-        VAR = pp.CaselessKeyword("var").suppress()
+        VAR = pp.CaselessKeyword("var")
         DOT = pp.Literal('.').suppress()
-        PROCEDURE = pp.CaselessKeyword("procedure").suppress()
-        FUNCTION = pp.CaselessKeyword("function").suppress()
+        PROCEDURE = pp.CaselessKeyword("procedure")
+        FUNCTION = pp.CaselessKeyword("function")
         PROGRAM = pp.CaselessKeyword("Program").suppress()
+        TO = pp.CaselessKeyword("to")
+        IF = pp.CaselessKeyword("if")
+        THEN = pp.CaselessKeyword("then")
+        ELSE = pp.CaselessKeyword("else")
+        WHILE = pp.CaselessKeyword("while")
+        DO = pp.CaselessKeyword("do")
+        FOR = pp.CaselessKeyword("for")
+        REPEAT = pp.CaselessKeyword("repeat")
+        UNTIL = pp.CaselessKeyword("until")
+        WRITELN = pp.CaselessKeyword("writeln")
 
         # Операторы
         ADD, SUB = pp.Literal('+'), pp.Literal('-')
         MUL, DIVISION = pp.Literal('*'), pp.Literal('/')
         MOD, DIV = pp.CaselessKeyword('mod'), pp.CaselessKeyword('div')
-        AND = pp.Literal('and')
-        OR = pp.Literal('or')
+        AND = pp.CaselessKeyword('and')
+        OR = pp.CaselessKeyword('or')
         GE, LE, GT, LT = pp.Literal('>='), pp.Literal('<='), pp.Literal('>'), pp.Literal('<')
-        NEQUALS, EQUALS = pp.Literal('!='), pp.Literal('=')
-        ARRAY = pp.CaselessKeyword("array").suppress()
-        OF = pp.CaselessKeyword("of").suppress()
+        NEQUALS, EQUALS = pp.Literal('<>'), pp.Literal('=')
+        ARRAY = pp.CaselessKeyword("array")
+        OF = pp.CaselessKeyword("of")
 
         # Forward declarations
         expr = pp.Forward()
         stmt = pp.Forward()
         stmt_list = pp.Forward()
-        
-        # Новые forward declarations для устранения циклических зависимостей
-        proc_decl = pp.Forward()
-        func_decl = pp.Forward()
-        var_decl_section = pp.Forward()
-        decl_section = pp.Forward()
+        block = pp.Forward()
 
         # Идентификаторы и вызовы
-        array_ident = ident + LBRACK + literal + RBRACK
+        array_ident = ident + LBRACK + expr + RBRACK
         call = ident + LPAR + pp.Optional(expr + pp.ZeroOrMore(COMMA + expr)) + RPAR
 
         # Выражения
@@ -75,72 +80,66 @@ class PascalGrammar:
             LPAR + expr + RPAR
         )
 
-        # Операции
-        mult = pp.Group(group + pp.ZeroOrMore((MUL | DIVISION | MOD | DIV) + group)).setName('bin_op')
-        add = pp.Group(mult + pp.ZeroOrMore((ADD | SUB) + mult)).setName('bin_op')
-        compare1 = pp.Group(add + pp.Optional((GE | LE | GT | LT) + add)).setName('bin_op')
-        compare2 = pp.Group(compare1 + pp.Optional((EQUALS | NEQUALS) + compare1)).setName('bin_op')
-        logical_and = pp.Group(compare2 + pp.ZeroOrMore(AND + compare2)).setName('bin_op')
-        logical_or = pp.Group(logical_and + pp.ZeroOrMore(OR + logical_and)).setName('bin_op')
+        # Операции с правильным приоритетом
+        factor = group
+        term = pp.Group(factor + pp.ZeroOrMore((MUL | DIVISION | MOD | DIV) + factor)).setName('bin_op')
+        simple_expr = pp.Group(term + pp.ZeroOrMore((ADD | SUB) + term)).setName('bin_op')
+        relational = pp.Group(simple_expr + pp.Optional((GE | LE | GT | LT | EQUALS | NEQUALS) + simple_expr)).setName('bin_op')
+        and_expr = pp.Group(relational + pp.ZeroOrMore(AND + relational)).setName('bin_op')
+        or_expr = pp.Group(and_expr + pp.ZeroOrMore(OR + and_expr)).setName('bin_op')
 
-        expr << logical_or
+        expr << or_expr
 
         # Объявления переменных
         ident_list = ident + pp.ZeroOrMore(COMMA + ident)
         var_decl = ident_list + COLON + type_spec + SEMI
         array_decl = ident_list + COLON + ARRAY + LBRACK + literal + pp.Literal("..").suppress() + literal + RBRACK + OF + type_spec + SEMI
 
-        # Изменим определение секции переменных
-        var_decl_section = VAR + pp.OneOrMore(var_decl | array_decl)
+        # Секция объявления переменных - исправлена
+        var_section = VAR.suppress() + pp.OneOrMore(var_decl | array_decl)
         
         # Операторы
-        assign = pp.Optional(array_ident | ident) + ASSIGN.suppress() + expr
+        assign = (array_ident | ident) + ASSIGN.suppress() + expr
         simple_stmt = assign | call
+        writeln_stmt = WRITELN + LPAR + expr + RPAR
 
-        for_body = stmt | pp.Group(SEMI).setName('stmt_list')
-        for_cond = assign + pp.Keyword("to").suppress() + literal
+        # Условные и циклические операторы
+        if_ = IF.suppress() + expr + THEN.suppress() + stmt + pp.Optional(ELSE.suppress() + stmt)
+        while_ = WHILE.suppress() + expr + DO.suppress() + stmt
+        repeat_ = REPEAT.suppress() + stmt_list + UNTIL.suppress() + expr
+        
+        # Цикл for
+        for_init = ident + ASSIGN.suppress() + expr
+        for_stmt = FOR.suppress() + for_init + TO.suppress() + expr + DO.suppress() + stmt
 
-        if_ = pp.Keyword("if").suppress() + expr + pp.Keyword("then").suppress() + stmt + pp.Optional(pp.Keyword("else").suppress() + stmt)
-        while_ = pp.Keyword("while").suppress() + expr + pp.Keyword("do").suppress() + stmt
-        repeat_ = pp.Keyword("repeat").suppress() + stmt_list + pp.Keyword("until").suppress() + expr
-        for_ = pp.Keyword("for").suppress() + for_cond + pp.Keyword("do").suppress() + for_body
-
+        # Составной оператор
         compound_stmt = LBRACE + stmt_list + RBRACE
 
         stmt << (
             if_ |
-            for_ |
+            for_stmt |
             while_ |
             repeat_ |
             compound_stmt |
-            (simple_stmt + SEMI)
+            (simple_stmt + SEMI) |
+            writeln_stmt
         )
 
         stmt_list << pp.ZeroOrMore(stmt)
 
-        # Параметры
+        # Параметры процедур и функций
         param_decl = ident_list + COLON + type_spec
         params = LPAR + pp.Optional(param_decl + pp.ZeroOrMore(SEMI + param_decl)) + RPAR
         
-        # Forward declarations для устранения циклических зависимостей
-        proc_decl = pp.Forward()
-        func_decl = pp.Forward()
-        decl_section = pp.Forward()
+        # Объявления процедур и функций - исправлены для правильного порядка
+        procedure_decl = pp.Group(PROCEDURE + ident + pp.Optional(params) + SEMI + block + SEMI)
+        function_decl = pp.Group(FUNCTION + ident + pp.Optional(params) + COLON + type_spec + SEMI + block + SEMI)
         
-        # Определение тела процедуры и функции с учетом возможных вложенных объявлений
-        proc_body = pp.Optional(decl_section) + compound_stmt
-        proc_decl << PROCEDURE + ident + pp.Optional(params) + SEMI + proc_body + SEMI
-
-        func_body = pp.Optional(decl_section) + compound_stmt
-        func_decl << FUNCTION + ident + pp.Optional(params) + COLON + type_spec + SEMI + func_body + SEMI
-        
-        # Определяем каждое объявление как отдельный элемент 
-        decl_item = var_decl_section | proc_decl | func_decl
-        decl_section << pp.ZeroOrMore(decl_item)
+        # Блок с объявлениями и телом - исправлен для корректного парсинга
+        block << pp.Optional(var_section) + pp.ZeroOrMore(procedure_decl | function_decl) + compound_stmt
         
         # Определение программы
-        program_body = LBRACE + stmt_list + RBRACE + DOT
-        program = PROGRAM + ident + SEMI + pp.Optional(decl_section) + program_body
+        program = PROGRAM + ident + SEMI + block + DOT
 
         # Финальный парсер
         start = program.ignore(pp.cStyleComment).ignore(pp.dblSlashComment) + pp.StringEnd()
@@ -148,6 +147,7 @@ class PascalGrammar:
         # Регистрация парсеров
         for var_name, value in locals().copy().items():
             if isinstance(value, pp.ParserElement):
+                print(f"Регистрируем парсер: {var_name}")
                 PascalParser.parse(var_name, value)
 
         return start

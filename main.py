@@ -1,27 +1,16 @@
 import os
 from grammar import *
 from semantic import *
+from codegen import MSILCodeGenerator, compile_to_exe
+from nodes import BlockNode
 
 
 def main():
-    # Исходный пример - процедура с параметром
-    prog1 = '''
-    Program t;
-    procedure p(a: integer);
-    var A : integer;
-    begin
-    A:=1;
-    g:=a;
-    end;    
-    BEGIN    
-    g:=1;
-    p(10);
-    END.
-    '''
+    """Демонстрация полного процесса компиляции Pascal программы"""
     
-    # Пример 2 - модифицированный для более строгого соответствия Pascal
-    prog2 = '''
-    Program n;
+    # Простая Pascal программа с переменными и базовыми операциями
+    prog = '''
+        Program n;
     var 
       x, y, a : integer;
       
@@ -43,90 +32,97 @@ def main():
     BEGIN
       x := 1;
       y := 2;
+      a := f(y);
+      writeln(a);
     END.
     '''
+        
+    print("=== PASCAL КОМПИЛЯТОР ===")
+    print("Исходная программа:")
+    print(prog)
+    print("=" * 50)
     
-    # Пример 3 - вложенная функция с рекурсией
-    prog3 = '''
-    Program f;
-    var a, b, c : char;
-    BEGIN
-    a := '1';
-    b := '1';
-    c := a + b;
-    END.
-    '''
-    
-    # Пример 4 - работа с массивами
-    prog4 = '''
-    Program arrays;
-    BEGIN
-    END.
-    '''
-    
-    # Пример 5 
-    prog5 = '''
-    Program complex;
-    BEGIN
-    END.
-    '''
-    
-    g = PascalGrammar()
-    
-    print("\n==== Тестирование примера 1 ====")
     try:
-        ast1 = g.parse(prog1)
-        print("AST для примера 1:")
-        print(*ast1.tree, sep=os.linesep)
-        symb_table_builder = SemanticAnalyzer()
-        symb_table_builder.visit(ast1)
-        print("Семантический анализ для примера 1 успешно завершен")
+        # 1. Парсинг
+        print("1. Парсинг...")
+        parser = PascalGrammar()
+        ast = parser.parse(prog)
+        print("✓ Парсинг успешен")
+        
+        print("\nAST дерево:")
+        try:
+            print(f"DEBUG: AST type: {type(ast)}")
+            print(f"DEBUG: AST children count: {len(ast.childs) if hasattr(ast, 'childs') else 'No childs'}")
+            if hasattr(ast, 'childs'):
+                for i, child in enumerate(ast.childs):
+                    print(f"DEBUG: Child {i}: {type(child).__name__}")
+                    if hasattr(child, 'childs') and len(child.childs) > 0:
+                        print(f"  Sub-children: {[type(c).__name__ for c in child.childs]}")
+                        # Проверяем BlockNode более детально
+                        if isinstance(child, BlockNode):
+                            print(f"  BlockNode details:")
+                            print(f"    var_section: {type(child.var_section).__name__ if child.var_section else None}")
+                            print(f"    declarations: {[type(d).__name__ for d in child.declarations]}")
+                            print(f"    stmt_list: {type(child.stmt_list).__name__ if child.stmt_list else None}")
+            
+            for line in ast.tree:
+                print(f"  {line}")
+        except Exception as e:
+            print(f"  Ошибка при выводе AST: {e}")
+            print(f"  AST тип: {type(ast)}")
+            print(f"  AST содержимое: {str(ast)}")
+        
+        # 2. Семантический анализ
+        print("\n2. Семантический анализ...")
+        analyzer = SemanticAnalyzer()
+        analyzer.visit(ast)
+        print(" Семантический анализ успешен")
+        
+        print("\nТаблица символов:")
+        print(f"  {analyzer.current_scope}")
+        
+        # 3. Генерация MSIL кода
+        print("\n3. Генерация MSIL кода...")
+        codegen = MSILCodeGenerator()
+        msil_code = codegen.generate_program(ast)
+        print(" Генерация MSIL кода успешна")
+        
+        print("\nСгенерированный MSIL код:")
+        print(msil_code)
+        
+        # 4. Сохранение MSIL в файл
+        il_filename = "test_program.il"
+        with open(il_filename, 'w') as f:
+            f.write(msil_code)
+        print(f"\n MSIL код сохранен в {il_filename}")
+        
+        # 5. Компиляция в исполняемый файл
+        print("\n4. Компиляция в исполняемый файл...")
+        success = compile_to_exe(msil_code, "test_program")
+        
+        if success:
+            print(" Успешно скомпилировано в test_program.exe")
+            
+            # 6. Попытка запуска
+            print("\n5. Запуск программы...")
+            try:
+                import subprocess
+                result = subprocess.run(["test_program.exe"], 
+                                      capture_output=True, text=True, timeout=5)
+                print(f"✓ Программа выполнена. Код возврата: {result.returncode}")
+                if result.stdout:
+                    print(f"Вывод: {result.stdout}")
+                if result.stderr:
+                    print(f"Ошибки: {result.stderr}")
+            except Exception as e:
+                print(f"✗ Ошибка при запуске: {e}")
+        else:
+            print("✗ Ошибка компиляции в exe")
+            
     except Exception as e:
-        print(f"Ошибка при обработке примера 1: {e}")
-    
-    print("\n==== Тестирование примера 2 ====")
-    try:
-        ast2 = g.parse(prog2)
-        print("AST для примера 2:")
-        print(*ast2.tree, sep=os.linesep)
-        symb_table_builder = SemanticAnalyzer()
-        symb_table_builder.visit(ast2)
-        print("Семантический анализ для примера 2 успешно завершен")
-    except Exception as e:
-        print(f"Ошибка при обработке примера 2: {e}")
-    
-    print("\n==== Тестирование примера 3 ====")
-    try:
-        ast3 = g.parse(prog3)
-        print("AST для примера 3:")
-        print(*ast3.tree, sep=os.linesep)
-        symb_table_builder = SemanticAnalyzer()
-        symb_table_builder.visit(ast3)
-        print("Семантический анализ для примера 3 успешно завершен")
-    except Exception as e:
-        print(f"Ошибка при обработке примера 3: {e}")
-    
-    print("\n==== Тестирование примера 4 ====")
-    try:
-        ast4 = g.parse(prog4)
-        print("AST для примера 4:")
-        print(*ast4.tree, sep=os.linesep)
-        symb_table_builder = SemanticAnalyzer()
-        symb_table_builder.visit(ast4)
-        print("Семантический анализ для примера 4 успешно завершен")
-    except Exception as e:
-        print(f"Ошибка при обработке примера 4: {e}")
-    
-    print("\n==== Тестирование примера 5 ====")
-    try:
-        ast5 = g.parse(prog5)
-        print("AST для примера 5:")
-        print(*ast5.tree, sep=os.linesep)
-        symb_table_builder = SemanticAnalyzer()
-        symb_table_builder.visit(ast5)
-        print("Семантический анализ для примера 5 успешно завершен")
-    except Exception as e:
-        print(f"Ошибка при обработке примера 5: {e}")
+        print(f"✗ Ошибка: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 if __name__ == "__main__":

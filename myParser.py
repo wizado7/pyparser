@@ -1,4 +1,5 @@
 from contextlib import suppress
+import inspect
 import pyparsing as pp
 from nodes import *
 
@@ -28,10 +29,25 @@ class PascalParser:
             parser.setParseAction(bin_op_parse_action)
         else:
             cls = ''.join(x.capitalize() for x in rule_name.split('_')) + 'Node'
+            print(f"DEBUG: Rule '{rule_name}' -> Class '{cls}'")
             with suppress(NameError):
-                cls = eval(cls)
-                if not inspect.isabstract(cls):
-                    def parse_action(s, loc, tocs):
-                        return cls(*tocs)
+                try:
+                    cls = eval(cls)
+                    print(f"DEBUG: Found class {cls}")
+                    if not inspect.isabstract(cls):
+                        print(f"DEBUG: Class {cls} is not abstract, creating parse action")
+                        def parse_action(s, loc, tocs):
+                            print(f"DEBUG: Creating {cls.__name__} with tokens: {[str(t)[:30] for t in tocs]}")
+                            try:
+                                result = cls(*tocs)
+                                print(f"DEBUG: Successfully created {cls.__name__}")
+                                return result
+                            except Exception as e:
+                                print(f"DEBUG: Error creating {cls.__name__}: {e}")
+                                raise
 
-                    parser.setParseAction(parse_action)
+                        parser.setParseAction(parse_action)
+                    else:
+                        print(f"DEBUG: Class {cls} is abstract, skipping")
+                except Exception as e:
+                    print(f"DEBUG: Error evaluating class {cls}: {e}")

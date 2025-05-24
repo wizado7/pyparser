@@ -22,14 +22,19 @@ class AstNode(ABC):
         pass
 
     @property
-    def tree(self) -> [str, ...]:
+    def tree(self) -> list[str]:
         res = [str(self)]
         childs_temp = self.childs
         for i, child in enumerate(childs_temp):
             ch0, ch = '├', '│'
             if i == len(childs_temp) - 1:
                 ch0, ch = '└', ' '
-            res.extend(((ch0 if j == 0 else ch) + ' ' + s for j, s in enumerate(child.tree)))
+            # Проверяем, что child является AstNode, а не строкой
+            if hasattr(child, 'tree'):
+                res.extend(((ch0 if j == 0 else ch) + ' ' + s for j, s in enumerate(child.tree)))
+            else:
+                # Если это строка, просто выводим её
+                res.append((ch0 + ' ' + str(child)))
         return res
 
     def visit(self, func: Callable[['AstNode'], None]) -> None:
@@ -49,7 +54,15 @@ class LiteralNode(ExprNode):
                  row: Optional[int] = None, line: Optional[int] = None, **props):
         super().__init__(row=row, line=line, **props)
         self.literal = literal
-        self.value = eval(literal)
+        try:
+            if literal.startswith("'") and literal.endswith("'"):
+                self.value = literal[1:-1]  # Строка
+            elif literal in ('True', 'False'):
+                self.value = literal == 'True'  # Булево
+            else:
+                self.value = int(literal)  # Число
+        except:
+            self.value = literal
 
     def __str__(self) -> str:
         return '{0} ({1})'.format(self.literal, type(self.value).__name__)
@@ -71,12 +84,12 @@ class ArrayIdentNode(ExprNode):
     def __init__(self, name: IdentNode, literal: LiteralNode, row: Optional[int] = None, line: Optional[int] = None,
                  **props):
         super().__init__(row=row, line=line, **props)
-        self.name = name;
-        self.literal = literal;
+        self.name = name
+        self.literal = literal
 
-    # @property
-    # def childs(self) -> Tuple[IdentNode, LiteralNode]:
-    #     return self.name, self.literal
+    @property
+    def childs(self) -> Tuple[IdentNode, LiteralNode]:
+        return (self.name, self.literal)
 
     def __str__(self) -> str:
         return '{0} [{1}]'.format(self.name, self.literal)
@@ -302,11 +315,11 @@ class StmtListNode(StmtNode):
     def __init__(self, *exprs: StmtNode,
                  row: Optional[int] = None, line: Optional[int] = None, **props):
         super().__init__(row=row, line=line, **props)
-        self.exprs = exprs
+        self.stmts = exprs
 
     @property
     def childs(self) -> Tuple[StmtNode, ...]:
-        return self.exprs
+        return self.stmts
 
     def __str__(self) -> str:
         return '...'
@@ -340,20 +353,110 @@ class ParamsNode(StmtNode):
     def __str__(self) -> str:
         return 'params'
 
+# Узел блока программы (содержит объявления и составной оператор)
+class BlockNode(StmtNode):
+    def __init__(self, *args, row: Optional[int] = None, line: Optional[int] = None, **props):
+        super().__init__(row=row, line=line, **props)
+        
+        print(f"DEBUG: Creating BlockNode with args: {[type(arg).__name__ for arg in args]}")
+        
+        # Разбираем аргументы блока
+        self.var_section = None
+        self.declarations = []
+        self.stmt_list = None
+        
+        for arg in args:
+            if isinstance(arg, VarSectionNode):
+                self.var_section = arg
+            elif isinstance(arg, (ProcedureDeclNode, FunctionDeclNode)):
+                self.declarations.append(arg)
+            elif isinstance(arg, StmtListNode):
+                self.stmt_list = arg
+            elif hasattr(arg, 'stmts'):  # Составной оператор
+                self.stmt_list = arg
+        
+        # Если нет stmt_list, создаем пустой
+        if self.stmt_list is None:
+            self.stmt_list = StmtListNode()
+
+    @property
+    def childs(self) -> Tuple[ExprNode, ...]:
+        result = []
+        if self.var_section:
+            result.append(self.var_section)
+        result.extend(self.declarations)
+        result.append(self.stmt_list)
+        return tuple(result)
+
+    def __str__(self) -> str:
+        return 'block'
+
 # Узел содержщий объявление процедуры
 # число параметров *args зависит от того, объявили мы процедуру с параметрами или без
 class ProcedureDeclNode(StmtNode):
-    def __init__(self, name: IdentNode, params: Tuple[IdentNode, ...], vars_decl: Optional[VarsDeclNode], stmt_list: StmtListNode,
-                 row: Optional[int] = None, line: Optional[int] = None, **props):
+    def __init__(self, *args, row: Optional[int] = None, line: Optional[int] = None, **props):
         super().__init__(row=row, line=line, **props)
-        self.name = name
-        self.params = params
-        self.vars_decl = vars_decl
-        self.stmt_list = stmt_list
+        print(f"DEBUG: Creating ProcedureDeclNode with {len(args)} args: {[str(arg)[:50] for arg in args]}")
+        
+        # Parse the procedure declaration from the arguments
+        self.name = IdentNode("unknown_procedure")
+        self.params = ()
+        self.vars_decl = None
+        self.stmt_list = StmtListNode()
+        
+        try:
+            if args and len(args) > 0:
+                # The parser should give us a grouped result
+                tokens = args[0]
+                print(f"DEBUG: ProcedureDeclNode parsing tokens: {tokens}")
+                
+                # If it's a ParseResults or similar iterable, extract components
+                if hasattr(tokens, '__iter__') and not isinstance(tokens, str):
+                    token_list = list(tokens)
+                    print(f"DEBUG: ProcedureDeclNode token list: {[str(t) for t in token_list]}")
+                    
+                    # Expected structure: ['procedure', name, [params], ';', block, ';']
+                    # Or: ['procedure', name, ';', block, ';'] (no params)
+                    if len(token_list) >= 2:
+                        # Skip 'procedure' keyword, get name
+                        if len(token_list) > 1:
+                            name_node = token_list[1]
+                            print(f"DEBUG: ProcedureDeclNode name_node: {name_node}, type: {type(name_node)}")
+                            if hasattr(name_node, 'name'):
+                                self.name = name_node
+                                print(f"DEBUG: ProcedureDeclNode extracted name: {self.name.name}")
+                            elif isinstance(name_node, str):
+                                self.name = IdentNode(name_node)
+                                print(f"DEBUG: ProcedureDeclNode extracted name from string: {name_node}")
+                        
+                        # Look for block (should be at the end)
+                        for token in reversed(token_list):
+                            print(f"DEBUG: ProcedureDeclNode checking block token: {token}, type: {type(token)}")
+                            if 'Block' in str(type(token)):
+                                if hasattr(token, 'stmt_list'):
+                                    self.stmt_list = token.stmt_list
+                                else:
+                                    self.stmt_list = token
+                                print(f"DEBUG: ProcedureDeclNode extracted block")
+                                break
+                
+        except Exception as e:
+            print(f"DEBUG: Error parsing ProcedureDeclNode: {e}")
+            # Keep defaults if parsing fails
+        
+        print(f"DEBUG: ProcedureDeclNode created successfully")
 
     @property
     def childs(self) -> Tuple[IdentNode, ...]:
-        return (self.name,) + self.params + (self.vars_decl,) + (self.stmt_list,)
+        result = []
+        if self.name:
+            result.append(self.name)
+        result.extend(self.params)
+        if self.vars_decl:
+            result.append(self.vars_decl)
+        if self.stmt_list:
+            result.append(self.stmt_list)
+        return tuple(result)
 
     def __str__(self) -> str:
         return 'procedure'
@@ -362,18 +465,89 @@ class ProcedureDeclNode(StmtNode):
 # Узел содержщий объявление функции
 # число параметров *args зависит от того, объявили мы функцию с параметрами или без
 class FunctionDeclNode(StmtNode):
-    def __init__(self, name: IdentNode, params: Tuple[IdentNode, ...], return_type: IdentNode, vars_decl: Optional[VarsDeclNode], stmt_list: StmtListNode,
-                 row: Optional[int] = None, line: Optional[int] = None, **props):
+    def __init__(self, *args, row: Optional[int] = None, line: Optional[int] = None, **props):
         super().__init__(row=row, line=line, **props)
-        self.name = name
-        self.params = params
-        self.return_type = return_type
-        self.vars_decl = vars_decl
-        self.stmt_list = stmt_list
+        print(f"DEBUG: Creating FunctionDeclNode with {len(args)} args: {[str(arg)[:50] for arg in args]}")
+        
+        # Parse the function declaration from the arguments
+        self.name = IdentNode("unknown_function")
+        self.params = ()
+        self.return_type = TypeSpecNode("integer")
+        self.vars_decl = None
+        self.stmt_list = StmtListNode()
+        
+        try:
+            if args and len(args) > 0:
+                # The parser should give us a grouped result
+                tokens = args[0]
+                print(f"DEBUG: FunctionDeclNode parsing tokens: {tokens}")
+                
+                # If it's a ParseResults or similar iterable, extract components
+                if hasattr(tokens, '__iter__') and not isinstance(tokens, str):
+                    token_list = list(tokens)
+                    print(f"DEBUG: FunctionDeclNode token list: {[str(t) for t in token_list]}")
+                    
+                    # Expected structure: ['function', name, [params], ':', return_type, ';', block, ';']
+                    # Or: ['function', name, ':', return_type, ';', block, ';'] (no params)
+                    if len(token_list) >= 2:
+                        # Skip 'function' keyword, get name
+                        if len(token_list) > 1:
+                            name_node = token_list[1]
+                            print(f"DEBUG: FunctionDeclNode name_node: {name_node}, type: {type(name_node)}")
+                            if hasattr(name_node, 'name'):
+                                self.name = name_node
+                                print(f"DEBUG: FunctionDeclNode extracted name: {self.name.name}")
+                            elif isinstance(name_node, str):
+                                self.name = IdentNode(name_node)
+                                print(f"DEBUG: FunctionDeclNode extracted name from string: {name_node}")
+                        
+                        # Look for return type (after ':' or as TypeSpecNode)
+                        for i, token in enumerate(token_list):
+                            print(f"DEBUG: FunctionDeclNode checking token {i}: {token}, type: {type(token)}")
+                            if 'TypeSpec' in str(type(token)):
+                                self.return_type = token
+                                print(f"DEBUG: FunctionDeclNode extracted return type: {self.return_type.name}")
+                                break
+                        
+                        # Look for params (ParamsNode)
+                        for token in token_list:
+                            token_type_str = str(type(token))
+                            print(f"DEBUG: FunctionDeclNode checking for params - token type: {token_type_str}")
+                            if 'ParamsNode' in token_type_str:
+                                self.params = (token,)  # Store as tuple
+                                print(f"DEBUG: FunctionDeclNode extracted params: {token}")
+                                break
+                        
+                        # Look for block (should be at the end)
+                        for token in reversed(token_list):
+                            print(f"DEBUG: FunctionDeclNode checking block token: {token}, type: {type(token)}")
+                            if 'Block' in str(type(token)):
+                                if hasattr(token, 'stmt_list'):
+                                    self.stmt_list = token.stmt_list
+                                else:
+                                    self.stmt_list = token
+                                print(f"DEBUG: FunctionDeclNode extracted block")
+                                break
+                
+        except Exception as e:
+            print(f"DEBUG: Error parsing FunctionDeclNode: {e}")
+            # Keep defaults if parsing fails
+        
+        print(f"DEBUG: FunctionDeclNode created successfully")
 
     @property
     def childs(self) -> Tuple[IdentNode, ...]:
-        return (self.name,) + self.params + (self.return_type,) + (self.vars_decl,) + (self.stmt_list,)
+        result = []
+        if self.name:
+            result.append(self.name)
+        result.extend(self.params)
+        if self.return_type:
+            result.append(self.return_type)
+        if self.vars_decl:
+            result.append(self.vars_decl)
+        if self.stmt_list:
+            result.append(self.stmt_list)
+        return tuple(result)
 
     def __str__(self) -> str:
         return 'function'
@@ -394,17 +568,86 @@ class DeclSectionNode(StmtNode):
         return 'declarations'
 
 
+# Узел реализующий раздел описания переменных из грамматики
+class VarSectionNode(StmtNode):
+    def __init__(self, *var_decs: Tuple[Union[VarDeclNode, ArrayDeclNode], ...],
+                 row: Optional[int] = None, line: Optional[int] = None, **props):
+        super().__init__(row=row, line=line, **props)
+        self.var_decs = var_decs
+
+    @property
+    def childs(self) -> Tuple[Union[VarDeclNode, ArrayDeclNode], ...]:
+        return self.var_decs
+
+    def __str__(self) -> str:
+        return 'var_section'
+
 # Узел описывающий программу
 # prog_name название программы
 # vars_decl раздел описаний
 # stmt_list тело программы
 class ProgramNode(StmtNode):
-    def __init__(self, name: IdentNode, decl_section: Optional[DeclSectionNode], stmt_list: StmtListNode,
-                 row: Optional[int] = None, line: Optional[int] = None, **props):
+    def __init__(self, *args, row: Optional[int] = None, line: Optional[int] = None, **props):
         super().__init__(row=row, line=line, **props)
-        self.name = name
-        self.decl_section = decl_section
-        self.stmt_list = stmt_list
+        
+        # Более гибкая обработка аргументов
+        # Ожидаем: PROGRAM ident SEMI block DOT (где некоторые элементы подавлены)
+        
+        if len(args) >= 1:
+            self.name = args[0]  # ident - имя программы
+            
+            # Ищем блок программы
+            block = None
+            for arg in args[1:]:
+                if isinstance(arg, BlockNode):
+                    block = arg
+                    break
+                elif hasattr(arg, 'childs') or isinstance(arg, StmtListNode):
+                    block = arg
+                    break
+            
+            if isinstance(block, BlockNode):
+                # Обрабатываем BlockNode
+                self.decl_section = block.var_section
+                self.stmt_list = block.stmt_list
+                
+                # Если есть объявления процедур/функций, создаем DeclSectionNode
+                if block.declarations:
+                    if self.decl_section:
+                        # Комбинируем существующие объявления переменных с процедурами/функциями
+                        all_decls = [self.decl_section] + block.declarations
+                        self.decl_section = DeclSectionNode(*all_decls)
+                    else:
+                        self.decl_section = DeclSectionNode(*block.declarations)
+                        
+            elif block and hasattr(block, 'childs') and len(block.childs) > 0:
+                # Блок содержит секции объявлений и основной код
+                childs = block.childs
+                
+                # Пытаемся найти секцию объявлений и тело программы
+                self.decl_section = None
+                self.stmt_list = None
+                
+                for child in childs:
+                    if isinstance(child, (VarSectionNode, DeclSectionNode)):
+                        self.decl_section = child
+                    elif isinstance(child, StmtListNode):
+                        self.stmt_list = child
+                    elif hasattr(child, 'stmts'):  # Составной оператор
+                        self.stmt_list = child
+                
+                # Если не нашли stmt_list, используем блок как stmt_list
+                if self.stmt_list is None:
+                    self.stmt_list = block if isinstance(block, StmtListNode) else StmtListNode()
+            else:
+                # Простая структура
+                self.decl_section = None
+                self.stmt_list = block if isinstance(block, StmtListNode) else StmtListNode()
+        else:
+            # Минимальная программа
+            self.name = IdentNode("unknown")
+            self.decl_section = None
+            self.stmt_list = StmtListNode()
 
     @property
     def childs(self) -> Tuple[IdentNode, Optional[DeclSectionNode], StmtListNode]:

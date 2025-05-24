@@ -53,6 +53,7 @@ class ScopedSymbolTable(object):
         self.define(BuiltinFunction('ReadLn'))
         self.define(BuiltinFunction('Write'))
         self.define(BuiltinFunction('WriteLn'))
+        self.define(BuiltinFunction('writeln'))
 
     def define(self, symbol: Symbol):
         print('Define: %s' % symbol)
@@ -178,12 +179,36 @@ class SemanticAnalyzer(NodeVisitor):
         self.current_scope.init_builtins()
         self.current_scope.init_builtin_functions()
 
-        # Посещаем блок объявлений
-        if hasattr(node, 'decl_section') and node.decl_section:
-            self.visit(node.decl_section)
-
-        # Посещаем тело программы
-        self.visit(node.stmt_list)
+        print(f"DEBUG: ProgramNode children: {[type(child).__name__ for child in node.childs]}")
+        
+        # Обрабатываем дочерние узлы в правильном порядке
+        for i, child in enumerate(node.childs):
+            print(f"DEBUG: Processing child {i}: {type(child).__name__}")
+            
+            # Первый дочерний узел обычно имя программы - определяем его как символ программы
+            if i == 0 and isinstance(child, IdentNode):
+                print(f"DEBUG: Defining program name: {child.name}")
+                # Определяем имя программы как символ программы
+                program_symbol = VarSymbol(child.name, BuiltinTypeSymbol('program'))
+                self.current_scope.define(program_symbol)
+                continue
+                
+            if isinstance(child, (VarSectionNode, DeclSectionNode)):
+                print("DEBUG: Processing declarations section")
+                self.visit(child)
+            elif isinstance(child, BlockNode):
+                print("DEBUG: Processing block")
+                self.visit(child)
+            elif isinstance(child, StmtListNode):
+                print("DEBUG: Processing statement list")
+                self.visit(child)
+            elif isinstance(child, IdentNode):
+                # Пропускаем другие IdentNode (кроме имени программы), они не должны обрабатываться здесь
+                print(f"DEBUG: Skipping IdentNode: {child.name}")
+                continue
+            elif hasattr(child, 'childs'):
+                print(f"DEBUG: Processing generic node with childs: {[type(c).__name__ for c in child.childs]}")
+                self.visit(child)
         
         self.log.append(f'LEAVE scope: global')
         self.current_scope = None
@@ -232,7 +257,7 @@ class SemanticAnalyzer(NodeVisitor):
         self.visit(node.body)
 
     def visit_StmtListNode(self, node: StmtListNode):
-        for stmt in node.exprs:
+        for stmt in node.stmts:
             self.visit(stmt)
 
     def visit_AssignNode(self, node: AssignNode):
@@ -316,7 +341,6 @@ class SemanticAnalyzer(NodeVisitor):
         func_type = node.return_type.name
         func_symbol = FunctionSymbol(func_name)
         func_symbol.type = func_type
-        self.current_scope.define(func_symbol)
 
         self.log.append(f'ENTER scope: {func_name}')
         function_scope = ScopedSymbolTable(
@@ -325,24 +349,69 @@ class SemanticAnalyzer(NodeVisitor):
             enclosing_scope=self.current_scope
         )
 
+        # Временно переключаемся в область функции для обработки параметров
+        prev_scope = self.current_scope
         self.current_scope = function_scope
         
-        # Обрабатываем параметры
+        # Обрабатываем параметры ПЕРЕД определением функции
         for param in node.params:
-            if isinstance(param, IdentNode):
+            print(f"DEBUG: Processing function parameter: {param}, type: {type(param)}")
+            if isinstance(param, ParamsNode):
+                print(f"DEBUG: ParamsNode vars_list: {param.vars_list}")
+                print(f"DEBUG: ParamsNode childs: {param.childs}")
+                
+                # ParamsNode содержит tuple из (IdentListNode, TypeSpecNode)
+                if len(param.vars_list) >= 2:
+                    ident_list = param.vars_list[0]  # IdentListNode
+                    type_spec = param.vars_list[1]   # TypeSpecNode
+                    
+                    if isinstance(ident_list, IdentListNode) and isinstance(type_spec, TypeSpecNode):
+                        param_type = prev_scope.lookup(type_spec.name)
+                        print(f"DEBUG: Processing param list with type: {type_spec.name}")
+                        
+                        for param_ident in ident_list.idents:
+                            var_symbol = VarSymbol(param_ident.name, param_type)
+                            self.current_scope.define(var_symbol)
+                            func_symbol.params.append(var_symbol)
+                            print(f"DEBUG: Added parameter: {param_ident.name}:{param_type}")
+                    else:
+                        print(f"DEBUG: Unexpected param structure: {type(ident_list)}, {type(type_spec)}")
+                else:
+                    print(f"DEBUG: ParamsNode has wrong number of elements: {len(param.vars_list)}")
+                    
+                # Обработка старой логики для совместимости
+                for param_decl in param.vars_list:
+                    print(f"DEBUG: Processing param_decl: {param_decl}, type: {type(param_decl)}")
+                    if isinstance(param_decl, VarDeclNode):
+                        # Стандартная декларация параметра
+                        param_type = prev_scope.lookup(param_decl.vars_type.name)
+                        for param_ident in param_decl.ident_list.idents:
+                            var_symbol = VarSymbol(param_ident.name, param_type)
+                            self.current_scope.define(var_symbol)
+                            func_symbol.params.append(var_symbol)
+                    else:
+                        print(f"DEBUG: Unexpected param_decl type: {type(param_decl)}")
+            elif isinstance(param, IdentNode):
                 # Это может быть простой идентификатор
                 param_name = param.name
-                param_type = self.current_scope.lookup('integer')  # По умолчанию integer
+                param_type = prev_scope.lookup('integer')  # По умолчанию integer
                 var_symbol = VarSymbol(param_name, param_type)
                 self.current_scope.define(var_symbol)
                 func_symbol.params.append(var_symbol)
             else:
                 # Это может быть декларация типа
-                param_type = self.current_scope.lookup(param.vars_type.name)
-                for param_name in param.ident_list.idents:
-                    var_symbol = VarSymbol(param_name.name, param_type)
-                    self.current_scope.define(var_symbol)
-                    func_symbol.params.append(var_symbol)
+                print(f"DEBUG: Processing param as VarDeclNode: {param}")
+                if hasattr(param, 'vars_type') and hasattr(param, 'ident_list'):
+                    param_type = prev_scope.lookup(param.vars_type.name)
+                    for param_name in param.ident_list.idents:
+                        var_symbol = VarSymbol(param_name.name, param_type)
+                        self.current_scope.define(var_symbol)
+                        func_symbol.params.append(var_symbol)
+                else:
+                    print(f"DEBUG: Skipping parameter: {param}")
+
+        # Теперь определяем функцию в родительской области с уже заполненными параметрами
+        prev_scope.define(func_symbol)
 
         # Обрабатываем локальные переменные
         if hasattr(node, 'vars_decl') and node.vars_decl:
@@ -511,3 +580,26 @@ class SemanticAnalyzer(NodeVisitor):
         """
         print(f"DEBUG: TypeSpecNode processing: {node.name}")
         return node.name
+
+    def visit_VarSectionNode(self, node: VarSectionNode):
+        """Обработка секции объявления переменных"""
+        for var_dec in node.var_decs:
+            # Проверяем, что это действительно узел, а не строка
+            if hasattr(var_dec, '__class__') and hasattr(var_dec, 'childs'):
+                self.visit(var_dec)
+    
+    def visit_BlockNode(self, node: BlockNode):
+        """Обработка блока программы"""
+        print("DEBUG: BlockNode processing")
+        
+        # Обрабатываем секцию переменных
+        if node.var_section:
+            self.visit(node.var_section)
+        
+        # Обрабатываем объявления процедур и функций
+        for decl in node.declarations:
+            self.visit(decl)
+        
+        # Обрабатываем тело блока
+        if node.stmt_list:
+            self.visit(node.stmt_list)
